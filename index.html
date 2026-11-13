@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zero-Hint Lua Obfuscator</title>
+    <style>
+        body { background: #0a0a0c; color: #e0e0e0; font-family: monospace; padding: 20px; margin: 0; text-align: center; }
+        .box { max-width: 600px; margin: 0 auto; background: #141418; padding: 20px; border-radius: 10px; border: 1px solid #2a2a35; }
+        h2 { color: #ff2a5f; margin-top: 0; letter-spacing: 1px; }
+        textarea { width: 100%; height: 150px; background: #08080a; color: #00ff88; border: 1px solid #2a2a35; border-radius: 6px; padding: 10px; box-sizing: border-box; font-size: 12px; margin-bottom: 12px; }
+        .row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; background: #1c1c24; padding: 10px; border-radius: 6px; font-size: 12px; }
+        button { background: #ff2a5f; color: #fff; border: none; padding: 12px; font-size: 15px; font-weight: bold; border-radius: 6px; cursor: pointer; width: 100%; margin-bottom: 10px; }
+        button.cp { background: #2a2a35; color: #00ff88; border: 1px solid #00ff88; }
+    </style>
+</head>
+<body>
+
+<div class="box">
+    <h2>ZERO-HINT OBFUSCATOR</h2>
+    <textarea id="inCode" placeholder="-- 元のLuaコードを貼り付け"></textarea>
+    
+    <div class="row">
+        <span>ダミー命令・迷路の複雑度:</span>
+        <select id="complexity" style="background:#08080a; color:#fff; padding:5px; border:1px solid #333;">
+            <option value="2000">Lv.1 (約2万文字)</option>
+            <option value="8000" selected>Lv.2 (約8万文字 - AI対策)</option>
+            <option value="20000">Lv.3 (約20万文字 - 極限)</option>
+        </select>
+    </div>
+
+    <button onclick="generate()">難読化を実行</button>
+    <textarea id="outCode" readonly placeholder="-- 出力結果"></textarea>
+    <button class="cp" onclick="copyRes()">コードをコピー</button>
+</div>
+
+<script>
+// 似た文字だけでランダムな変数名を作る
+function vName() {
+    const c = ["I", "l", "1", "_"];
+    let r = "_";
+    const len = Math.floor(Math.random() * 6) + 6;
+    for(let i=0; i<len; i++) r += c[Math.floor(Math.random() * c.length)];
+    return r + Math.floor(Math.random() * 99);
+}
+
+// ランダムな整数（ステート番号用）
+function rInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function generate() {
+    const src = document.getElementById("inCode").value;
+    if(!src) return;
+
+    const junkSize = parseInt(document.getElementById("complexity").value);
+    
+    // ランダムな状態遷移番号（制御フロー平坦化用）
+    const sInit = rInt(1000, 9999);
+    const sLoop = rInt(10000, 29999);
+    const sDec  = rInt(30000, 49999);
+    const sExec = rInt(50000, 69999);
+    const sExit = rInt(70000, 99999);
+    const sFake1 = rInt(100000, 199999);
+    const sFake2 = rInt(200000, 299999);
+
+    // 暗号鍵とソルトの生成
+    const baseKey = rInt(17, 240);
+    const multKey = rInt(3, 19);
+
+    // 元のコードを動的数値演算で暗号化（Base系不使用）
+    const bytes = new TextEncoder().encode(src);
+    let payload = [];
+    for(let i = 0; i < bytes.length; i++) {
+        // 位置と乗算を使った非線形XOR
+        let k = ((baseKey + (i * multKey)) ^ (i % 13)) & 0xFF;
+        payload.push(bytes[i] ^ k);
+    }
+
+    // 巨大なダミー配列（中身も暗号配列と区別がつかない数値）
+    let junk = [];
+    for(let i = 0; i < junkSize; i++) {
+        junk.push(rInt(0, 255));
+    }
+
+    // 変数名のランダム割り当て
+    const vEnv = vName(), vBit = vName(), vStr = vName(), vTbl = vName(), vDbg = vName();
+    const vSt = vName(), vIdx = vName(), vOut = vName(), vPay = vName(), vJnk = vName();
+    const vK1 = vName(), vK2 = vName(), vFn = vName(), vChk = vName();
+
+    // ヒントやコメントを一切排除した迷路構造の1行Luaコードを生成
+    let lua = `local ${vEnv}=getfenv and getfenv()or _ENV;local ${vBit}=bit32;local ${vStr}=string;local ${vTbl}=table;local ${vDbg}=debug;`;
+    
+    // 環境チェック（ヒントなしの即フリーズ罠）
+    lua += `local ${vChk}={${vStr}.char,${vStr}.byte,${vBit}.bxor,${vTbl}.concat,pcall,loadstring};`;
+    lua += `if not ${vDbg} or not ${vDbg}.info then while true do end end;`;
+    lua += `for _=1,#${vChk} do if ${vDbg}.info(${vChk}[_],"s")~="[C]"then while true do end end end;`;
+
+    // データ領域（ダミーと本物の区別がつかないように配置）
+    lua += `local ${vJnk}={${junk.join(",")}};`;
+    lua += `local ${vPay}={${payload.join(",")}};`;
+    
+    // 状態遷移マシン（制御フロー平坦化）
+    lua += `local ${vSt}=${sInit};local ${vIdx}=1;local ${vOut}={};`;
+    lua += `local ${vK1}=${baseKey}+(#${vJnk}-${junkSize});local ${vK2}=${multKey};`;
+    
+    lua += `while ${vSt}~=${sExit} do `;
+    
+    // 偽の分岐1（絶対に通らないゴミ計算）
+    lua += `if ${vSt}==${sFake1} then ${vK1}=${vBit}.bxor(${vK1},0xFF);${vSt}=${sFake2};`;
+    
+    // 初期状態
+    lua += `elseif ${vSt}==${sInit} then if #${vPay}>0 then ${vSt}=${sLoop} else ${vSt}=${sExit} end;`;
+    
+    // 復号処理状態
+    lua += `elseif ${vSt}==${sDec} then local _b=${vBit}.band(${vBit}.bxor(${vK1}+((${vIdx}-1)*${vK2}),(${vIdx}-1)%13),255);${vOut}[${vIdx}]=${vStr}.char(${vBit}.bxor(${vPay}[${vIdx}],_b));${vIdx}=${vIdx}+1;${vSt}=${sLoop};`;
+    
+    // ループ判定状態
+    lua += `elseif ${vSt}==${sLoop} then if ${vIdx}<=#${vPay} then ${vSt}=${sDec} else ${vSt}=${sExec} end;`;
+    
+    // 偽の分岐2
+    lua += `elseif ${vSt}==${sFake2} then ${vOut}[1]=${vStr}.char(0);${vSt}=${sExit};`;
+    
+    // 実行状態
+    lua += `elseif ${vSt}==${sExec} then local ${vFn}=loadstring(${vTbl}.concat(${vOut}));if ${vFn} then pcall(${vFn})end;${vSt}=${sExit};`;
+    
+    lua += `end end`;
+
+    document.getElementById("outCode").value = lua;
+}
+
+function copyRes() {
+    const el = document.getElementById("outCode");
+    el.select();
+    document.execCommand("copy");
+}
+</script>
+
+</body>
+</html>
